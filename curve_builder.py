@@ -3,20 +3,25 @@ from scipy.interpolate import UnivariateSpline
 import numpy as np
 
 
-# Clase para manejar curvas de mercado (calculo de la curva fwd instantanea e interpolacion)
 class Curve:
+    """
+    Class to handle market curves, including discount factors and
+    instantaneous forward rates, with cubic interpolation and spline smoothing.
+    """
+
     def __init__(self, time, discount_factors, smooth=1e-7):
         """
-        Clase para manejar curva de descuento y curva forward instantánea.
+        Initializes a market curve object containing the discount curve
+        and the corresponding instantaneous forward curve.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         time : array_like
-            Tiempos (en años) de los nodos de la curva.
+            Time to maturity (in years) of the curve nodes.
         discount_factors : array_like
-            Factores de descuento en los tiempos indicados.
+            Discount factors at the given maturities.
         smooth : float, optional
-            Parámetro de suavizado para el spline (default 1e-7).
+            Smoothing parameter for the forward spline interpolation (default: 1e-7).
         """
         self.time = np.array(time)
         self.discount_factors = np.array(discount_factors)
@@ -25,9 +30,11 @@ class Curve:
         self._build_interpolators()
 
     def _build_interpolators(self):
-        """Construye las funciones de descuento y forward en un solo paso."""
-        
-        # Interpolador de factores de descuento
+        """
+        Builds both the discount factor interpolation function and
+        the instantaneous forward rate spline in a single step.
+        """
+        # Cubic interpolation for discount factors
         self.discount_func = interp1d(
             self.time,
             self.discount_factors,
@@ -35,15 +42,40 @@ class Curve:
             fill_value="extrapolate",
             bounds_error=False
         )
-        # Interpolador spline para forwards (derivada del logaritmo de P)
+
+        # Spline for the log of discount factors (needed for forward rate derivation)
         lnP = np.log(self.discount_factors)
         self.forward_spline = UnivariateSpline(self.time, lnP, s=self.smooth)
 
     def discount(self, t):
-        """Devuelve el factor de descuento interpolado."""
+        """
+        Returns the interpolated discount factor P(0, t).
+
+        Parameters
+        ----------
+        t : float or array_like
+            Time(s) to maturity.
+
+        Returns
+        -------
+        float or np.ndarray
+            Discount factor(s) corresponding to t.
+        """
         return self.discount_func(t)
 
     def forward(self, t):
-        """Devuelve el forward instantáneo interpolado."""
+        """
+        Returns the interpolated instantaneous forward rate f(0, t).
+
+        Parameters
+        ----------
+        t : float or array_like
+            Time(s) to maturity.
+
+        Returns
+        -------
+        float or np.ndarray
+            Instantaneous forward rate(s) corresponding to t.
+        """
         t = np.array(t)
         return -self.forward_spline.derivative(1)(t)
