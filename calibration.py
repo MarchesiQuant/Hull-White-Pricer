@@ -1,5 +1,5 @@
 from scipy.optimize import minimize
-
+import numpy as np
 
 class HullWhiteCalibrator:
     """
@@ -10,14 +10,12 @@ class HullWhiteCalibrator:
     as closely as possible, minimizing a relative squared error metric.
     """
 
-    def __init__(self, model, pricer, market_prices):
+    def __init__(self, pricer, market_prices):
         """
-        Initializes the Hull–White calibrator.
+        Initializes the Hull–White calibrator using a HullWhitePricer instance.
 
         Parameters
         ----------
-        model : HullWhiteModel
-            The Hull–White model instance to be calibrated.
         pricer : HullWhitePricer
             Pricer instance capable of pricing the derivatives in the market dataset.
         market_prices : dict
@@ -27,10 +25,11 @@ class HullWhiteCalibrator:
             - 'Dates' (list[list[float]]): List of time grids (e.g., caplet maturities).
             - 'Notional' (list[float]): Notional amounts for each instrument.
         """
-        self.model = model
         self.pricer = pricer
+        self.model = pricer.model
         self.market_prices = market_prices
         self.history = []
+
 
     def objective(self, params):
         """

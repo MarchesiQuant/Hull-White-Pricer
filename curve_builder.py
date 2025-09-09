@@ -63,7 +63,7 @@ class Curve:
         """
         return self.discount_func(t)
 
-    def forward(self, t):
+    def inst_forward_rate(self, t):
         """
         Returns the interpolated instantaneous forward rate f(0, t).
 
@@ -79,3 +79,26 @@ class Curve:
         """
         t = np.array(t)
         return -self.forward_spline.derivative(1)(t)
+    
+
+    def forward_rate(self, T1, T2):
+        """
+        Computes the simple forward rate F(0; T1, T2) implied by the discount curve.
+
+        Parameters
+        ----------
+        T1 : float
+            Start time of the forward rate.
+        T2 : float
+            End time of the forward rate.
+
+        Returns
+        -------
+        float
+            Forward rate between T1 and T2.
+        """
+        
+        P1 = self.discount(T1)
+        P2 = self.discount(T2)
+
+        return (P1 / P2 - 1.0) / (T2 - T1)

@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
 
 
 class HullWhiteModel:
@@ -51,7 +50,7 @@ class HullWhiteModel:
         self.sigma = parameters['sigma']
         self.r0 = parameters['r0']
 
-    def forward_rate(self, t):
+    def inst_forward_rate(self, t):
         """
         Compute the instantaneous forward rate f(0, t).
 
@@ -65,7 +64,7 @@ class HullWhiteModel:
         float
             Instantaneous forward rate at time t.
         """
-        return self.curve.forward(t)
+        return self.curve.inst_forward_rate(t)
 
     def discount_factor(self, t):
         """
@@ -82,6 +81,22 @@ class HullWhiteModel:
             Discount factor for maturity t.
         """
         return self.curve.discount(t)
+    
+    def forward_rate(self, T1, T2):
+        """
+        Compute the simple forward rate F(0; T1, T2) implied by the discount curve. 
+        Parameters
+        ----------      
+        T1 : float
+            Start time of the forward rate.
+        T2 : float
+            End time of the forward rate.
+        Returns 
+        -------
+        float
+            Forward rate between T1 and T2.
+        """
+        return self.curve.forward_rate(T1, T2)
 
     def _alpha(self, t):
         """
@@ -102,7 +117,7 @@ class HullWhiteModel:
         """
         a = self.parameters['a']
         sigma = self.parameters['sigma']
-        fwd = self.forward_rate(t)
+        fwd = self.inst_forward_rate(t)
         return fwd + (sigma**2) / (2 * a**2) * (1 - np.exp(-a * t))**2
 
     def _B(self, t, T):
@@ -151,7 +166,7 @@ class HullWhiteModel:
         sigma = self.parameters['sigma']
         P_t = self.discount_factor(t)
         P_T = self.discount_factor(T)
-        fwd = self.forward_rate(t)
+        fwd = self.inst_forward_rate(t)
         B = self._B(t, T)
         return (P_T / P_t) * np.exp(
             B * fwd - (sigma**2 / (4 * a)) * (1 - np.exp(-2 * a * t)) * B**2
@@ -212,7 +227,7 @@ class HullWhiteModel:
         a = self.parameters['a']
         sigma = self.parameters['sigma']
         V = (sigma**2 / (2 * a)) * (1 - np.exp(-2 * a * t))
-        E = self.curve.forward(t)
+        E = self.curve.inst_forward_rate(t)
         return E + np.sqrt(V) * z
 
 
@@ -360,30 +375,76 @@ class HullWhiteSimulation:
 
 class HullWhiteCurveBuilder:
     """
-    Analytical and Monte Carlo pricing utilities for bonds, discount factors,
-    forward rates, and long-term rates under the Hull–White model.
+    Hull–White curve builder that provides both analytical formulas and Monte Carlo 
+    simulation utilities for pricing zero-coupon bonds, discount factors, 
+    forward rates, and long-term rates, using a pre-built discount curve.
 
     Attributes
     ----------
     model : HullWhiteModel
-        Hull–White model instance.
+        Hull–White model instance constructed from the provided curve and parameters.
     sim : HullWhiteSimulation
-        Simulation engine.
+        Monte Carlo simulation engine built from the Hull–White model.
+    curve : Curve
+        Pre-initialized discount curve used for forwards and short rate calculations.
     """
 
-    def __init__(self, model, simulation):
+    def __init__(self, curve, params, n_paths=10**5, n_steps=100, seed=2025, smooth=1e-7):
         """
-        Initialize the curve builder.
+        Initialize the Hull–White curve builder using a pre-built Curve instance and 
+        Hull–White model parameters.
 
         Parameters
         ----------
-        model : HullWhiteModel
-            Hull–White model instance.
-        simulation : HullWhiteSimulation
-            Simulation engine for Monte Carlo computations.
+        Curve : Curve
+            Pre-initialized discount curve instance containing times to maturity 
+            and discount factors.
+        params : dict
+            Dictionary containing Hull–White model parameters:
+                - 'a' : float, mean reversion speed
+                - 'sigma' : float, volatility
+                - 'r0' : float, initial short rate
+        n_paths : int, optional
+            Number of Monte Carlo paths (default: 100,000).
+        n_steps : int, optional
+            Number of discretization steps per path (default: 100).
+        seed : int, optional
+            Random seed for reproducibility (default: 2025).
+        smooth : float, optional
+            Smoothing parameter for the discount curve (not used if Curve is already initialized).
+
+        Workflow
+        --------
+        1. Use the provided Curve instance for discount factors and instantaneous forwards.
+        2. Build the Hull–White model using the curve and provided parameters.
+        3. Initialize the Monte Carlo simulation engine for short rate paths.
         """
-        self.model = model
-        self.sim = simulation
+        self.curve = curve
+        self.model = HullWhiteModel(self.curve, params)
+        self.sim = HullWhiteSimulation(self.model, n_paths=n_paths, n_steps=n_steps, seed=seed)
+
+
+    def short_rate(self, t, fwd_measure=False):
+        """
+        Simulate the short rate r(t) at a single time t using the exact distribution.
+
+        Parameters
+        ----------
+        t : float
+            Time in years.
+        fwd_measure : bool, optional
+            If True, simulate r(t) under the T-forward measure.
+
+        Returns
+        -------
+        ndarray
+            Array of simulated short rates (n_paths,).
+        """
+        if fwd_measure:
+            return self.sim.simulate_short_rate_direct_forward(t)
+        else:
+            return self.sim.simulate_short_rate_direct(t)
+
 
     def zero_coupon_bond(self, t, T, fwd_measure=False):
         """
@@ -459,8 +520,8 @@ class HullWhiteCurveBuilder:
             Instantaneous forward rates.
         """
         r_t = self.sim.simulate_short_rate_direct(t)
-        fwd_T = self.model.forward_rate(T)
-        fwd_t = self.model.forward_rate(t)
+        fwd_T = self.model.inst_forward_rate(T)
+        fwd_t = self.model.inst_forward_rate(t)
         B = self.model._B(t, T)
         a = self.model.parameters['a']
         sigma = self.model.parameters['sigma']
@@ -530,240 +591,3 @@ class HullWhiteCurveBuilder:
         F = (1 / (T2 - T1)) * (P_t_T1 / P_t_T2 - 1)
         return F
 
-
-class HullWhitePricer:
-    """
-    Pricing engine for interest rate derivatives under the Hull–White one-factor model.
-
-    Supports:
-        - Zero-coupon bond options (calls & puts)
-        - Caps and floors
-        - Swaps and swaptions
-        - Monte Carlo or closed-form valuation
-
-    Attributes
-    ----------
-    model : HullWhiteModel
-        Hull–White model instance providing parameters and analytical formulas.
-    curve_sim : HullWhiteCurveBuilder
-        Curve builder capable of generating zero-coupon bonds, discount factors, etc.
-    """
-
-    def __init__(self, model, curve_sim):
-        """
-        Initialize the Hull–White pricer.
-
-        Parameters
-        ----------
-        model : HullWhiteModel
-            Hull–White model instance.
-        curve_sim : HullWhiteCurveBuilder
-            Curve builder for Monte Carlo valuations.
-        """
-        self.model = model
-        self.curve_sim = curve_sim
-
-    def zero_bond_put(self, T, S, K, mc=False):
-        """
-        Value a European put option on a zero-coupon bond P(T, S).
-
-        Parameters
-        ----------
-        T : float
-            Option maturity in years.
-        S : float
-            Bond maturity in years (must be S > T).
-        K : float
-            Strike price.
-        mc : bool, optional
-            If True, value by Monte Carlo; otherwise use closed form.
-
-        Returns
-        -------
-        float
-            Present value of the put option.
-        """
-        if T == 0:
-            P_0S = self.model.discount_factor(S)
-            return max(K - P_0S, 0)
-
-        if mc:
-            D_T = self.curve_sim.discount_factor(0, T)
-            P_TS = self.curve_sim.zero_coupon_bond(T, S)
-            payoff = np.maximum(K - P_TS, 0)
-            V0 = np.mean(D_T * payoff)
-        else:
-            sigma = self.model.parameters['sigma']
-            a = self.model.parameters['a']
-            B = self.model._B(T, S)
-            P_S = self.model.discount_factor(S)
-            P_T = self.model.discount_factor(T)
-            sigma_p = sigma * np.sqrt((1 - np.exp(-2 * a * T)) / (2 * a)) * B
-            h = (1 / sigma_p) * np.log(P_S / (K * P_T)) + 0.5 * sigma_p
-            V0 = K * P_T * norm.cdf(-h + sigma_p) - P_S * norm.cdf(-h)
-
-        return V0
-
-    def zero_bond_call(self, T, S, K, mc=False):
-        """
-        Value a European call option on a zero-coupon bond P(T, S).
-
-        Parameters
-        ----------
-        T : float
-            Option maturity in years.
-        S : float
-            Bond maturity in years (must be S > T).
-        K : float
-            Strike price.
-        mc : bool, optional
-            If True, value by Monte Carlo; otherwise use closed form.
-
-        Returns
-        -------
-        float
-            Present value of the call option.
-        """
-        if mc:
-            D_T = self.curve_sim.discount_factor(0, T)
-            P_TS = self.curve_sim.zero_coupon_bond(T, S)
-            payoff = np.maximum(P_TS - K, 0)
-            V0 = np.mean(D_T * payoff)
-        else:
-            sigma = self.model.parameters['sigma']
-            a = self.model.parameters['a']
-            B = self.model._B(T, S)
-            P_S = self.model.discount_factor(S)
-            P_T = self.model.discount_factor(T)
-            sigma_p = sigma * np.sqrt((1 - np.exp(-2 * a * T)) / (2 * a)) * B
-            h = (1 / sigma_p) * np.log(P_S / (K * P_T)) + 0.5 * sigma_p
-            V0 = P_S * norm.cdf(h) - K * P_T * norm.cdf(h - sigma_p)
-
-        return V0
-
-    def cap(self, Tau, N, K, mc=False):
-        """
-        Value an interest rate cap using caplets.
-
-        Parameters
-        ----------
-        Tau : list of float
-            Payment times for caplets (first entry is fixing time, not payment).
-        N : float
-            Notional amount.
-        K : float
-            Cap strike rate.
-        mc : bool, optional
-            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
-
-        Returns
-        -------
-        float
-            Present value of the cap.
-        """
-        Cap = 0
-        if mc:
-            for i in range(1, len(Tau)):
-                T1 = Tau[i - 1]
-                T2 = Tau[i]
-                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
-                Delta = T2 - T1
-                payoff = Delta * np.maximum(F_T1 - K, 0)
-                P_T2 = self.model.discount_factor(T2)
-                Cap += P_T2 * np.mean(payoff)
-        else:
-            for i in range(1, len(Tau)):
-                t_prev = Tau[i - 1]
-                t_curr = Tau[i]
-                Delta = t_curr - t_prev
-                K_bond = 1 + K * Delta
-                put_price = self.zero_bond_put(t_prev, t_curr, 1 / K_bond)
-                Cap += K_bond * put_price
-
-        return N * Cap
-
-    def floor(self, Tau, N, K, mc=False):
-        """
-        Value an interest rate floor using floorlets.
-
-        Parameters
-        ----------
-        Tau : list of float
-            Payment times for floorlets (first entry is fixing time, not payment).
-        N : float
-            Notional amount.
-        K : float
-            Floor strike rate.
-        mc : bool, optional
-            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
-
-        Returns
-        -------
-        float
-            Present value of the floor.
-        """
-        Floor = 0
-        if mc:
-            for i in range(1, len(Tau)):
-                T1 = Tau[i - 1]
-                T2 = Tau[i]
-                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
-                Delta = T2 - T1
-                payoff = Delta * np.maximum(K - F_T1, 0)
-                P_T2 = self.model.discount_factor(T2)
-                Floor += P_T2*np.mean(payoff)
-        else:
-            for i in range(1, len(Tau)):
-                t_prev = Tau[i - 1]
-                t_curr = Tau[i]
-                Delta = t_curr - t_prev
-                K_bond = 1 + K * Delta
-                call_price = self.zero_bond_call(t_prev, t_curr, 1 / K_bond)
-                Floor += K_bond * call_price
-
-        return N * Floor
-    
-    # This needs a fix
-    def swap(self, Tau, N, K, mc=False):
-        """
-        Value a plain vanilla interest rate swap.
-
-        Parameters
-        ----------
-        Tau : list of float
-            Payment times for the fixed leg (first entry is start time).
-        N : float
-            Notional amount.
-        K : float
-            Fixed rate.
-        mc : bool, optional
-            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
-
-        Returns
-        -------
-        float
-            Present value of the swap.
-        """
-
-        Annuity = 0
-        for i in range(1, len(Tau)):
-            Delta = Tau[i] - Tau[i-1]
-            P_T = self.model.discount_factor(Tau[i])
-            Annuity += Delta * P_T
-
-        Fixed_leg = Annuity * K
-        Floating_leg = 0
-
-        if mc:
-            for i in range(1, len(Tau)):
-                T1 = Tau[i - 1]
-                T2 = Tau[i]
-                Delta = T2 - T1
-                P_T2 = self.model.discount_factor(T2)               
-                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
-                Floating_leg += P_T2 * Delta * np.mean(F_T1)
-        else:
-            Floating_leg = self.model.discount_factor(Tau[0]) - self.model.discount_factor(Tau[-1])
-
-        Swap = (Floating_leg - Fixed_leg) * N
-        return Swap
