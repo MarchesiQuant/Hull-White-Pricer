@@ -444,7 +444,7 @@ class HullWhiteCurveBuilder:
 
     def inst_forward_rate(self, t, T):
         """
-        Compute the instantaneous forward rate F(t, T) using zero-coupon bonds.
+        Compute the instantaneous forward rate f(t, T) using zero-coupon bonds.
 
         Parameters
         ----------
@@ -465,12 +465,12 @@ class HullWhiteCurveBuilder:
         a = self.model.parameters['a']
         sigma = self.model.parameters['sigma']
         K = (sigma**2) * (1 - np.exp(-2 * a * t)) / (2 * a)
-        F = fwd_T + np.exp(-a * (T - t)) * (r_t - fwd_t + K * B)
-        return F
+        f = fwd_T + np.exp(-a * (T - t)) * (r_t - fwd_t + K * B)
+        return f
 
-    def long_rate(self, t, T):
+    def long_rate(self, t, T, fwd_measure=False):
         """
-        Compute the long-term rate R(t, T).
+        Compute the continuous compounding long-term rate R(t, T).
 
         Formula:
             R(t, T) = -log(A(t, T)) / (T - t) + (B(t, T) / (T - t)) * r(t)
@@ -481,19 +481,54 @@ class HullWhiteCurveBuilder:
             Current time in years.
         T : float
             Long rate maturity in years.
+        fwd_measure : bool, optional
+            If True, simulate r(t) under the T-forward measure.
 
         Returns
         -------
         ndarray
             Long rates for each Monte Carlo path.
         """
+
+        if fwd_measure:
+            r_t = self.sim.simulate_short_rate_direct_forward(t)
+        else:   
+            r_t = self.sim.simulate_short_rate_direct(t)
+
         A = self.model._A(t, T)
         B = self.model._B(t, T)
-        r_t = self.sim.simulate_short_rate_direct(t)
         alpha = -np.log(A) / (T - t)
         beta = B / (T - t)
         R = alpha + beta * r_t
         return R
+    
+    def forward_rate(self, t, T1, T2, fwd_measure=False):
+        """
+        Compute the simple forward rate F(t; T1, T2) between T1 and T2.
+
+        Formula:
+            F(t; T1, T2) = (1 / (T2 - T1)) * (P(t, T1) / P(t, T2) - 1)
+
+        Parameters
+        ----------
+        t : float
+            Current time in years.
+        T1 : float
+            Start of the forward period in years.
+        T2 : float
+            End of the forward period in years.
+        fwd_measure : bool, optional
+            If True, simulate r(t) under the T2-forward measure.
+
+        Returns
+        -------
+        ndarray
+            Forward rates for each Monte Carlo path.
+        """
+        P_t_T1 = self.zero_coupon_bond(t, T1, fwd_measure=fwd_measure)
+        P_t_T2 = self.zero_coupon_bond(t, T2, fwd_measure=fwd_measure)
+        F = (1 / (T2 - T1)) * (P_t_T1 / P_t_T2 - 1)
+        return F
 
 
 class HullWhitePricer:
@@ -503,6 +538,7 @@ class HullWhitePricer:
     Supports:
         - Zero-coupon bond options (calls & puts)
         - Caps and floors
+        - Swaps and swaptions
         - Monte Carlo or closed-form valuation
 
     Attributes
@@ -618,7 +654,7 @@ class HullWhitePricer:
         K : float
             Cap strike rate.
         mc : bool, optional
-            If True, value via Monte Carlo; otherwise use closed form.
+            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
 
         Returns
         -------
@@ -630,11 +666,11 @@ class HullWhitePricer:
             for i in range(1, len(Tau)):
                 T1 = Tau[i - 1]
                 T2 = Tau[i]
-                R_T = self.curve_sim.long_rate(T1, T2)
+                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
                 Delta = T2 - T1
-                payoff = Delta * np.maximum(R_T - K, 0)
-                D_T = self.curve_sim.discount_factor(0, T2)
-                Cap += np.mean(D_T * payoff)
+                payoff = Delta * np.maximum(F_T1 - K, 0)
+                P_T2 = self.model.discount_factor(T2)
+                Cap += P_T2 * np.mean(payoff)
         else:
             for i in range(1, len(Tau)):
                 t_prev = Tau[i - 1]
@@ -659,7 +695,7 @@ class HullWhitePricer:
         K : float
             Floor strike rate.
         mc : bool, optional
-            If True, value via Monte Carlo; otherwise use closed form.
+            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
 
         Returns
         -------
@@ -671,11 +707,11 @@ class HullWhitePricer:
             for i in range(1, len(Tau)):
                 T1 = Tau[i - 1]
                 T2 = Tau[i]
-                R_T = self.curve_sim.long_rate(T1, T2)
+                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
                 Delta = T2 - T1
-                payoff = Delta * np.maximum(K - R_T, 0)
-                D_T = self.curve_sim.discount_factor(0, T2)
-                Floor += np.mean(D_T * payoff)
+                payoff = Delta * np.maximum(K - F_T1, 0)
+                P_T2 = self.model.discount_factor(T2)
+                Floor += P_T2*np.mean(payoff)
         else:
             for i in range(1, len(Tau)):
                 t_prev = Tau[i - 1]
@@ -686,3 +722,48 @@ class HullWhitePricer:
                 Floor += K_bond * call_price
 
         return N * Floor
+    
+    # This needs a fix
+    def swap(self, Tau, N, K, mc=False):
+        """
+        Value a plain vanilla interest rate swap.
+
+        Parameters
+        ----------
+        Tau : list of float
+            Payment times for the fixed leg (first entry is start time).
+        N : float
+            Notional amount.
+        K : float
+            Fixed rate.
+        mc : bool, optional
+            If True, value via Monte Carlo (fwd measure); otherwise use closed form.
+
+        Returns
+        -------
+        float
+            Present value of the swap.
+        """
+
+        Annuity = 0
+        for i in range(1, len(Tau)):
+            Delta = Tau[i] - Tau[i-1]
+            P_T = self.model.discount_factor(Tau[i])
+            Annuity += Delta * P_T
+
+        Fixed_leg = Annuity * K
+        Floating_leg = 0
+
+        if mc:
+            for i in range(1, len(Tau)):
+                T1 = Tau[i - 1]
+                T2 = Tau[i]
+                Delta = T2 - T1
+                P_T2 = self.model.discount_factor(T2)               
+                F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
+                Floating_leg += P_T2 * Delta * np.mean(F_T1)
+        else:
+            Floating_leg = self.model.discount_factor(Tau[0]) - self.model.discount_factor(Tau[-1])
+
+        Swap = (Floating_leg - Fixed_leg) * N
+        return Swap
