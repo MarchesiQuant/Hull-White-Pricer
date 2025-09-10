@@ -9,7 +9,7 @@ class HullWhiteCalibrator:
     as closely as possible, minimizing a relative squared error metric.
     """
 
-    def __init__(self, pricer, market_prices):
+    def __init__(self, pricer, market_prices, calibrate_to = 'caps'):
         """
         Initializes the Hull–White calibrator using a HullWhitePricer instance.
 
@@ -23,10 +23,13 @@ class HullWhiteCalibrator:
             - 'Strike' (list[float]): Strike rates.
             - 'Dates' (list[list[float]]): List of time grids (e.g., caplet maturities).
             - 'Notional' (list[float]): Notional amounts for each instrument.
+        calibrate_to : str, optional
+            Type of instruments to calibrate to ('caps' or 'swaptions'). Default is 'caps'.
         """
         self.pricer = pricer
         self.model = pricer.model
         self.market_prices = market_prices
+        self.calibrate_to = calibrate_to
         self.history = []
 
 
@@ -52,11 +55,18 @@ class HullWhiteCalibrator:
         error = 0.0
         for i in range(len(self.market_prices['Price'])):
             market_price = self.market_prices['Price'][i]
-            K = self.market_prices['Strike'][i]
+            K = self.market_prices['Strike'][i]/100
             Tau = self.market_prices['Dates'][i]
             N = self.market_prices['Notional'][i]
 
-            model_price = self.pricer.cap(Tau, N, K)
+            if self.calibrate_to == 'swaptions':
+                model_price = self.pricer.swaption(Tau, N, K)
+            
+            elif self.calibrate_to == 'caps':
+                model_price = self.pricer.cap(Tau, N, K)
+            
+            else:
+                raise ValueError("calibrate_to must be 'caps' or 'swaptions'")
 
             # Relative squared error, with small epsilon to avoid division by zero
             error += ((model_price - market_price) ** 2) / (market_price ** 2 + 1e-6)
@@ -78,7 +88,7 @@ class HullWhiteCalibrator:
             _, _, err = self.history[-1]
             print(f"a: {a:.5f}, sigma: {sigma:.5f}, Error: {err:.5e}")
 
-    def calibrate(self, init_params=(0.01, 0.01), bounds=[(1e-4, 0.5), (1e-4, 0.5)], method='Powell'):
+    def calibrate(self, init_params=(0.01, 0.01), bounds=[(1e-4, 0.5), (1e-4, 0.5)], method='L-BFGS-B' ):
         """
         Runs the optimization procedure to calibrate (a, sigma).
 
@@ -113,13 +123,20 @@ class HullWhiteCalibrator:
             # Print percentage differences between calibrated model prices and market prices
             for i in range(len(self.market_prices['Price'])):
                 market_price = self.market_prices['Price'][i]
-                K = self.market_prices['Strike'][i]
+                K = self.market_prices['Strike'][i]/100
                 Tau = self.market_prices['Dates'][i]
                 N = self.market_prices['Notional'][i]
 
-                model_price = self.pricer.cap(Tau, N, K)
+                if self.calibrate_to == 'swaptions':
+                    model_price = self.pricer.swaption(Tau, N, K)
+                    label = f"Swaption {int(Tau[0])}y x {int(Tau[-1]) - int(Tau[0])}y"
+
+                else:
+                    model_price = self.pricer.cap(Tau, N, K)
+                    label = f"Cap {int(max(Tau))}y"
+                
                 dif = model_price / market_price - 1
-                print(f"Cap {int(max(Tau))}y difference: {100 * dif: .4f}%")
+                print(f"{label} difference: {100*dif: .4f}%")
         else:
             print("Calibration failed:", result.message)
 

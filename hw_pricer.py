@@ -284,7 +284,7 @@ class HullWhitePricer:
             root = root - (1 - P_i)
             return root
         
-        def find_rstar(Tau, K, x_min=-0.02, x_max= 0.1):
+        def find_rstar(Tau, K, x_min=-3, x_max= 3):
             f = lambda r: jamshidian_root(Tau, K, r)
             r_star = brentq(f, x_min, x_max, xtol=1e-12)
             return r_star
