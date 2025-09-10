@@ -98,7 +98,7 @@ class HullWhiteModel:
         """
         return self.curve.forward_rate(T1, T2)
 
-    def _alpha(self, t):
+    def alpha(self, t):
         """
         Compute α(t), the deterministic shift function in Hull–White.
 
@@ -120,7 +120,7 @@ class HullWhiteModel:
         fwd = self.inst_forward_rate(t)
         return fwd + (sigma**2) / (2 * a**2) * (1 - np.exp(-a * t))**2
 
-    def _B(self, t, T):
+    def B(self, t, T):
         """
         Compute B(t, T) function used in bond pricing.
 
@@ -142,7 +142,7 @@ class HullWhiteModel:
         a = self.parameters['a']
         return (1 - np.exp(-a * (T - t))) / a
 
-    def _A(self, t, T):
+    def A(self, t, T):
         """
         Compute A(t, T) function used in zero-coupon bond pricing.
 
@@ -167,7 +167,7 @@ class HullWhiteModel:
         P_t = self.discount_factor(t)
         P_T = self.discount_factor(T)
         fwd = self.inst_forward_rate(t)
-        B = self._B(t, T)
+        B = self.B(t, T)
         return (P_T / P_t) * np.exp(
             B * fwd - (sigma**2 / (4 * a)) * (1 - np.exp(-2 * a * t)) * B**2
         )
@@ -199,7 +199,7 @@ class HullWhiteModel:
         a = self.parameters['a']
         sigma = self.parameters['sigma']
         V = (sigma**2 / (2 * a)) * (1 - np.exp(-2 * a * t))
-        E = r0 * np.exp(-a * t) + self._alpha(t) - np.exp(-a * t) * self._alpha(0)
+        E = r0 * np.exp(-a * t) + self.alpha(t) - np.exp(-a * t) * self.alpha(0)
         return E + np.sqrt(V) * z
 
     def short_rate_forward(self, t, z=None):
@@ -333,13 +333,13 @@ class HullWhiteSimulation:
         x = np.zeros((self.n_paths, self.n_steps + 1))
         r = np.zeros_like(x)
 
-        x[:, 0] = self.model.r0 - self.model._alpha(0)
+        x[:, 0] = self.model.r0 - self.model.alpha(0)
         r[:, 0] = self.model.r0
 
         for i in range(1, self.n_steps + 1):
             z = np.random.normal(size=self.n_paths)
             x[:, i] = x[:, i - 1] - self.model.a * x[:, i - 1] * dt + self.model.sigma * np.sqrt(dt) * z
-            r[:, i] = x[:, i] + self.model._alpha(times[i])
+            r[:, i] = x[:, i] + self.model.alpha(times[i])
 
         return r, times
 
@@ -362,7 +362,7 @@ class HullWhiteSimulation:
         r_euler_end = r_euler[:, -1]
         r_direct = self.simulate_short_rate_direct(T)
 
-        analytic_mean = self.model.r0 * np.exp(-self.model.a * T) + self.model._alpha(T) - np.exp(-self.model.a * T) * self.model._alpha(0)
+        analytic_mean = self.model.r0 * np.exp(-self.model.a * T) + self.model.alpha(T) - np.exp(-self.model.a * T) * self.model.alpha(0)
         analytic_std = np.sqrt((self.model.sigma**2) / (2 * self.model.a) * (1 - np.exp(-2 * self.model.a * T)))
 
         data = {
@@ -473,8 +473,8 @@ class HullWhiteCurveBuilder:
         else:
             r_t = self.sim.simulate_short_rate_direct(t)
 
-        A = self.model._A(t, T)
-        B = self.model._B(t, T)
+        A = self.model.A(t, T)
+        B = self.model.B(t, T)
         price = A * np.exp(-B * r_t)
         return price
 
@@ -522,7 +522,7 @@ class HullWhiteCurveBuilder:
         r_t = self.sim.simulate_short_rate_direct(t)
         fwd_T = self.model.inst_forward_rate(T)
         fwd_t = self.model.inst_forward_rate(t)
-        B = self.model._B(t, T)
+        B = self.model.B(t, T)
         a = self.model.parameters['a']
         sigma = self.model.parameters['sigma']
         K = (sigma**2) * (1 - np.exp(-2 * a * t)) / (2 * a)
@@ -556,8 +556,8 @@ class HullWhiteCurveBuilder:
         else:   
             r_t = self.sim.simulate_short_rate_direct(t)
 
-        A = self.model._A(t, T)
-        B = self.model._B(t, T)
+        A = self.model.A(t, T)
+        B = self.model.B(t, T)
         alpha = -np.log(A) / (T - t)
         beta = B / (T - t)
         R = alpha + beta * r_t
