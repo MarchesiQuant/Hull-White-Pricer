@@ -99,7 +99,7 @@ class HullWhiteCalibrator:
         bounds : list[tuple[float, float]], optional
             Bounds for (a, sigma). Default is [(1e-4, 0.5), (1e-4, 0.5)].
         method : str, optional
-            Optimization method to use. Default is 'Powell'.
+            Optimization method to use. Default is 'L-BFGS-B'.
 
         Returns
         -------
