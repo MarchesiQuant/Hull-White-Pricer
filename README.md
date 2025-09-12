@@ -45,5 +45,5 @@ This repository provides a set of Python modules to build discount curves, imple
 Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/hull-white-model.git
-cd hull-white-model
+git clone https://github.com/MarchesiQuant/Hull-White-Pricer.git
+cd Hull-White-Pricer
