@@ -24,7 +24,7 @@ This repository provides a set of Python modules to build discount curves, imple
   - Implements the price engines for valuing interest rate products
   - `HullWhitePricer`: prices common interest rate derivatives such as zero-coupon bond options (calls and puts), caps, floors, swaps, swaptions... with both analytic formulas and Monte Carlo methods.
 
-### 4. `calibration.py`
+### 4. `hw_calibration.py`
 
 - Implements the `HullWhiteCalibrator` class to calibrate the Hull-White model parameters (`a` and `sigma`) to market prices of caps or other interest rate instruments.
 - Uses nonlinear least squares optimization (`scipy.optimize.minimize`) to minimize pricing errors.
