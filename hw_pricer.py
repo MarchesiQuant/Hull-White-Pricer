@@ -21,18 +21,29 @@ class HullWhitePricer:
         Hull–White curve builder providing the model, simulation engine, and discount curve.
     """
 
-    def __init__(self, curve):
+    def __init__(self, curve, n_paths=10**5, n_steps=252, seed=2025, hw_params=None):
+        self.curve = curve
+        self.curve_sim = HullWhiteCurveBuilder(curve, params = hw_params, n_paths = n_paths, n_steps = n_steps, seed = seed)
+        self.model = self.curve_sim.model
+
+
+    def set_simulation(self, n_paths=None, n_steps=None, seed=None):
         """
-        Initialize the Hull–White pricer using a single HullWhiteCurveBuilder instance.
+        Update Monte Carlo simulation settings in-place after initialization.
 
         Parameters
         ----------
-        curve : Curve
-            Instance representing the initial discount curve P(0, T).
+        n_paths : int, optional
+            New number of Monte Carlo paths.
+        n_steps : int, optional
+            New number of Euler discretization steps.
+        seed : int, optional
+            Random seed to reseed NumPy's RNG.
         """
-        self.curve = curve
-        self.curve_sim = HullWhiteCurveBuilder(curve)
-        self.model = self.curve_sim.model
+        if n_paths is not None: self.curve_sim.sim.n_paths = int(n_paths)
+        if n_steps is not None: self.curve_sim.sim.n_steps = int(n_steps)
+        if seed is not None: np.random.seed(seed)
+
 
     def zero_bond_put(self, T, S, K, mc=False):
         """
