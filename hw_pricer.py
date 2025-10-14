@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.stats import norm
 from scipy.optimize import brentq
+from hw_model import HullWhiteCurveBuilder
 
 
 class HullWhitePricer:
@@ -20,19 +21,29 @@ class HullWhitePricer:
         Hull–White curve builder providing the model, simulation engine, and discount curve.
     """
 
-    def __init__(self, curve_builder):
+    def __init__(self, curve, n_paths=10**5, n_steps=252, seed=2025, hw_params=None):
+        self.curve = curve
+        self.curve_sim = HullWhiteCurveBuilder(curve, params = hw_params, n_paths = n_paths, n_steps = n_steps, seed = seed)
+        self.model = self.curve_sim.model
+
+
+    def set_simulation(self, n_paths=None, n_steps=None, seed=None):
         """
-        Initialize the Hull–White pricer using a single HullWhiteCurveBuilder instance.
+        Update Monte Carlo simulation settings in-place after initialization.
 
         Parameters
         ----------
-        curve_builder : HullWhiteCurveBuilder
-            Pre-initialized Hull–White curve builder containing the model, simulation engine,
-            and discount curve.
+        n_paths : int, optional
+            New number of Monte Carlo paths.
+        n_steps : int, optional
+            New number of Euler discretization steps.
+        seed : int, optional
+            Random seed to reseed NumPy's RNG.
         """
-        self.curve_builder = curve_builder
-        self.model = curve_builder.model
-        self.curve_sim = curve_builder
+        if n_paths is not None: self.curve_sim.sim.n_paths = int(n_paths)
+        if n_steps is not None: self.curve_sim.sim.n_steps = int(n_steps)
+        if seed is not None: np.random.seed(seed)
+
 
     def zero_bond_put(self, T, S, K, mc=False):
         """
@@ -111,6 +122,55 @@ class HullWhitePricer:
             V0 = P_S * norm.cdf(h) - K * P_T * norm.cdf(h - sigma_p)
 
         return V0
+    
+    
+    def caplet(self, T1, T2, N, K, method='js'):
+        """
+        Value an interest rate caplet.
+
+        Parameters
+        ----------
+        T1 : float
+            Fixing time.
+        T2 : float
+            Payment time (must be T2 > T1).
+        N : float
+            Notional amount.
+        K : float
+            Caplet strike rate.
+        method : str, optional
+            If 'mc', value via Monte Carlo (fwd measure); if 'js', use zero bond put, if 'cf', use closed form.
+
+        Returns
+        -------
+        float
+            Present value of the caplet.
+        """
+        Delta = T2 - T1
+        K_bond = 1 + K * Delta
+
+        if method == 'mc':
+            F_T1 = self.curve_sim.forward_rate(T1, T1, T2, fwd_measure=True)
+            payoff = Delta * np.maximum(F_T1 - K, 0)
+            P_T2 = self.model.discount_factor(T2)
+            Caplet = P_T2 * np.mean(payoff)
+
+        elif method == 'js':
+            put_price = self.zero_bond_put(T1, T2, 1 / K_bond)
+            Caplet = K_bond * put_price
+
+        elif method == 'cf':
+            sigma = self.model.parameters['sigma']
+            a = self.model.parameters['a']
+            B = self.model.B(T1, T2)
+            P_T2 = self.model.discount_factor(T2)
+            P_T1 = self.model.discount_factor(T1)
+            sigma_p = sigma * np.sqrt((1 - np.exp(-2 * a * T1)) / (2 * a)) * B
+            h = (1 / sigma_p) * np.log(P_T2 * K_bond / P_T1) + 0.5 * sigma_p
+            Caplet = (P_T1 * norm.cdf(-h + sigma_p) - K_bond * P_T2 * norm.cdf(-h))
+
+        return N * Caplet
+    
 
     def cap(self, Tau, N, K, mc=False):
         """

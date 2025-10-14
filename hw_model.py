@@ -33,7 +33,7 @@ class HullWhiteModel:
         Initial short rate.
     """
 
-    def __init__(self, curve, parameters):
+    def __init__(self, curve, parameters=None):
         """
         Initialize the Hull-White model with a given discount curve and parameters.
 
@@ -41,14 +41,16 @@ class HullWhiteModel:
         ----------
         curve : Curve
             Discount curve used to fit θ(t) and compute forwards.
-        parameters : dict
-            Dictionary with 'a', 'sigma', and 'r0'.
+        parameters : dict, optional
+            Dictionary with 'a', 'sigma', and 'r0'. If None, defaults are used: {'a': 0.01, 'sigma': 0.01, 'r0': curve.inst_forward_rate(0)}
         """
+
         self.curve = curve
-        self.parameters = parameters
-        self.a = parameters['a']
-        self.sigma = parameters['sigma']
-        self.r0 = parameters['r0']
+
+        # Default parameters
+        defaults = {'a': 0.01, 'sigma': 0.01, 'r0': curve.inst_forward_rate(0)}
+        if parameters is None: parameters = {}
+        self.parameters = {'a': parameters.get('a', defaults['a']),'sigma': parameters.get('sigma', defaults['sigma']),'r0': parameters.get('r0', defaults['r0'])}
 
     def inst_forward_rate(self, t):
         """
@@ -389,7 +391,7 @@ class HullWhiteCurveBuilder:
         Pre-initialized discount curve used for forwards and short rate calculations.
     """
 
-    def __init__(self, curve, params, n_paths=10**5, n_steps=100, seed=2025, smooth=1e-7):
+    def __init__(self, curve, params=None, n_paths=10**5, n_steps=100, seed=2025, smooth=1e-7):
         """
         Initialize the Hull–White curve builder using a pre-built Curve instance and 
         Hull–White model parameters.
@@ -399,11 +401,12 @@ class HullWhiteCurveBuilder:
         Curve : Curve
             Pre-initialized discount curve instance containing times to maturity 
             and discount factors.
-        params : dict
-            Dictionary containing Hull–White model parameters:
+        params : dict, optional
+            Dictionary containing Hull–White model parameters (optional):
                 - 'a' : float, mean reversion speed
                 - 'sigma' : float, volatility
                 - 'r0' : float, initial short rate
+            If None, defaults are used: {'a': 0.01, 'sigma': 0.01, 'r0': curve.inst_forward_rate(0)}
         n_paths : int, optional
             Number of Monte Carlo paths (default: 100,000).
         n_steps : int, optional

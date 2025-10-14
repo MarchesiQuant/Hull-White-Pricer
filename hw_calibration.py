@@ -1,142 +1,148 @@
 from scipy.optimize import minimize
+from numpy import sqrt
+
 
 class HullWhiteCalibrator:
     """
-    Calibrates the Hull–White one-factor model parameters `a` (mean reversion speed)
-    and `sigma` (volatility) to market prices of interest rate derivatives.
-
-    This class adjusts the model so that its prices match market-observed prices
-    as closely as possible, minimizing a relative squared error metric.
+    Calibrates the Hull–White one-factor model parameter `sigma` (volatility)
+    with a fixed mean reversion speed `a`.
     """
 
-    def __init__(self, pricer, market_prices, calibrate_to = 'caps'):
+    def __init__(self, pricer, market_prices, calibrate_to='Caplets', a_fixed=0.01):
         """
-        Initializes the Hull–White calibrator using a HullWhitePricer instance.
+        Initializes the Hull–White calibrator fixing 'a' and calibrating only 'sigma'.
 
         Parameters
         ----------
         pricer : HullWhitePricer
             Pricer instance capable of pricing the derivatives in the market dataset.
         market_prices : dict
-            Dictionary containing market data with keys:
-            - 'Price' (list[float]): Observed market prices.
-            - 'Strike' (list[float]): Strike rates.
-            - 'Dates' (list[list[float]]): List of time grids (e.g., caplet maturities).
-            - 'Notional' (list[float]): Notional amounts for each instrument.
+            Dictionary containing market data.
         calibrate_to : str, optional
-            Type of instruments to calibrate to ('caps' or 'swaptions'). Default is 'caps'.
+            Type of instruments to calibrate to ('Caplets' or 'Swaptions').
+        a_fixed : float, optional
+            Fixed mean reversion parameter. Default is 0.01.
         """
+
         self.pricer = pricer
         self.model = pricer.model
         self.market_prices = market_prices
         self.calibrate_to = calibrate_to
+        self.a_fixed = a_fixed
         self.history = []
 
+        # Set fixed a
+        self.model.parameters['a'] = self.a_fixed
 
-    def objective(self, params):
+
+    def objective(self, sigma):
         """
-        Objective function for calibration: computes the relative squared error
-        between model and market prices for a given (a, sigma) pair.
+        Objective function for calibration: relative squared error
+        between model and market prices, fixing 'a' and varying 'sigma'.
 
         Parameters
         ----------
-        params : tuple[float, float]
-            The parameters to test: (a, sigma).
+        sigma : float
+            Volatility parameter to test.
 
         Returns
         -------
         float
-            The sum of relative squared errors across all instruments.
+            The sum of relative squared errors.
         """
-        a, sigma = params
-        self.model.parameters['a'] = a
+        sigma = sigma[0]  # optimizer passes as array
         self.model.parameters['sigma'] = sigma
+        self.model.parameters['a'] = self.a_fixed
 
         error = 0.0
-        for i in range(len(self.market_prices['Price'])):
-            market_price = self.market_prices['Price'][i]
-            K = self.market_prices['Strike'][i]/100
-            Tau = self.market_prices['Dates'][i]
+        n = len(self.market_prices['Prices'])
+        for i in range(n):
+            market_price = self.market_prices['Prices'][i]
+            K = self.market_prices['Strike'][i] / 100
             N = self.market_prices['Notional'][i]
 
-            if self.calibrate_to == 'swaptions':
-                model_price = self.pricer.swaption(Tau, N, K)
-            
-            elif self.calibrate_to == 'caps':
-                model_price = self.pricer.cap(Tau, N, K)
-            
+            if self.calibrate_to == 'Caplets':
+                T = self.market_prices['Expiry'][i]
+                S = self.market_prices['Maturity'][i]
+                model_price = self.pricer.caplet(T, S, N, K)
+
+            elif self.calibrate_to == 'Swaptions':
+                Tau = self.market_prices['Dates'][i]
+                DF = self.pricer.curve.discount(Tau[0])
+                model_price = self.pricer.swaption(Tau, N, K)/DF # Forward Premium 
+
             else:
-                raise ValueError("calibrate_to must be 'caps' or 'swaptions'")
+                raise ValueError("Calibracion only implemented for 'Caplets' and 'Swaptions'.")
 
-            # Relative squared error, with small epsilon to avoid division by zero
-            error += ((model_price - market_price) ** 2) / (market_price ** 2 + 1e-6)
+            error += (1/n) * ((model_price - market_price)**2) / (market_price**2 + 1e-6)
 
-        self.history.append((a, sigma, error))
-        return error
+        self.history.append((sigma, sqrt(error)))
+        return sqrt(error)
 
-    def callback(self, params):
+
+    def callback(self, sigma):
         """
-        Callback function for the optimizer: prints current parameters and error.
-
-        Parameters
-        ----------
-        params : tuple[float, float]
-            Current (a, sigma) being tested by the optimizer.
+        Print current sigma and error during optimization.
         """
-        a, sigma = params
+        sigma = sigma[0]
         if self.history:
-            _, _, err = self.history[-1]
-            print(f"a: {a:.5f}, sigma: {sigma:.5f}, Error: {err:.5e}")
+            _, err = self.history[-1]
+            print(f"a fixed: {self.a_fixed:.6f}, sigma: {sigma:.6f}, RMSRE: {err:.5e}")
 
-    def calibrate(self, init_params=(0.01, 0.01), bounds=[(1e-4, 0.5), (1e-4, 0.5)], method='L-BFGS-B' ):
+
+    def calibrate(self, init_sigma=0.03, bounds=[(1e-4, 0.75)], method='L-BFGS-B'):
         """
-        Runs the optimization procedure to calibrate (a, sigma).
+        Run optimization to calibrate only sigma.
 
         Parameters
         ----------
-        init_params : tuple[float, float], optional
-            Initial guess for (a, sigma). Default is (0.01, 0.01).
+        init_sigma : float, optional
+            Initial guess for sigma.
         bounds : list[tuple[float, float]], optional
-            Bounds for (a, sigma). Default is [(1e-4, 0.5), (1e-4, 0.5)].
+            Bounds for sigma.
         method : str, optional
-            Optimization method to use. Default is 'L-BFGS-B'.
+            Optimization method.
 
         Returns
         -------
         scipy.optimize.OptimizeResult
-            The result of the optimization process.
+            Result of the optimization.
         """
-        result = minimize(
-            self.objective,
-            init_params,
-            bounds=bounds,
-            method=method,
-            callback=self.callback
-        )
+
+        result = minimize(self.objective, [init_sigma], bounds=bounds, method=method, callback=self.callback)
 
         if result.success:
-            a_opt, sigma_opt = result.x
-            self.model.parameters['a'] = a_opt
+            sigma_opt = result.x[0]
             self.model.parameters['sigma'] = sigma_opt
-            print(" ")
+            self.model.parameters['a'] = self.a_fixed
 
-            # Print percentage differences between calibrated model prices and market prices
-            for i in range(len(self.market_prices['Price'])):
-                market_price = self.market_prices['Price'][i]
-                K = self.market_prices['Strike'][i]/100
-                Tau = self.market_prices['Dates'][i]
+            print(f"\nCalibration successful:")
+            print(f"Iterations: {result.nit}")
+            print(f"Number of instruments: {len(self.market_prices['Prices'])}")
+            print(f"Total Error: {result.fun:>+8.3%}\n")
+            print("Parameters:") 
+            print(f"Fixed a: {self.a_fixed:.5f}")
+            print(f"Optimal sigma: {sigma_opt:.5f}\n")
+
+            for i in range(len(self.market_prices['Prices'])):
+                market_price = self.market_prices['Prices'][i]
+                K = self.market_prices['Strike'][i] / 100
                 N = self.market_prices['Notional'][i]
 
-                if self.calibrate_to == 'swaptions':
-                    model_price = self.pricer.swaption(Tau, N, K)
-                    label = f"Swaption {int(Tau[0])}y x {int(Tau[-1]) - int(Tau[0])}y"
+                if self.calibrate_to == 'Caplets':
+                    T = self.market_prices['Expiry'][i]
+                    S = self.market_prices['Maturity'][i]
+                    model_price = self.pricer.caplet(T, S, N, K)
+                    dif = model_price / market_price - 1
+                    print(f"Caplet {i:>2}: {T:>5.2f}Y to {S:<5.2f}Y | Model: {model_price:>8.2f} | Market: {market_price:>8.2f} | Diff: {dif:>+8.3%}")
 
-                else:
-                    model_price = self.pricer.cap(Tau, N, K)
-                    label = f"Cap {int(max(Tau))}y"
-                
-                dif = model_price / market_price - 1
-                print(f"{label} difference: {100*dif: .4f}%")
+                elif self.calibrate_to == 'Swaptions':
+                    Tau = self.market_prices['Dates'][i]
+                    DF = self.pricer.curve.discount(Tau[0])
+                    model_price = self.pricer.swaption(Tau, N, K)/DF # Forward Premium 
+                    dif = model_price / market_price - 1
+                    print(f"Swaption {i:>3}: {Tau[0]:>5.2f}Y to {Tau[-1]:<5.2f}Y | Model: {model_price:>8.2f} | Market: {market_price:>8.2f} | Diff: {dif:>+8.3%}")
+
         else:
             print("Calibration failed:", result.message)
 
