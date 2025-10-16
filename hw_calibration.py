@@ -1,5 +1,7 @@
 from scipy.optimize import minimize
-from numpy import sqrt
+import numpy as np
+from scipy.optimize import brentq
+from scipy.stats import norm
 
 
 class HullWhiteCalibrator:
@@ -76,8 +78,8 @@ class HullWhiteCalibrator:
 
             error += (1/n) * ((model_price - market_price)**2) / (market_price**2 + 1e-6)
 
-        self.history.append((sigma, sqrt(error)))
-        return sqrt(error)
+        self.history.append((sigma, np.sqrt(error)))
+        return np.sqrt(error)
 
 
     def callback(self, sigma):
@@ -90,7 +92,7 @@ class HullWhiteCalibrator:
             print(f"a fixed: {self.a_fixed:.6f}, sigma: {sigma:.6f}, RMSRE: {err:.5e}")
 
 
-    def calibrate(self, init_sigma=0.03, bounds=[(1e-4, 0.75)], method='L-BFGS-B'):
+    def calibrate(self, init_sigma=0.01, bounds=[(1e-3, 0.5)], method='L-BFGS-B'):
         """
         Run optimization to calibrate only sigma.
 
@@ -109,7 +111,7 @@ class HullWhiteCalibrator:
             Result of the optimization.
         """
 
-        result = minimize(self.objective, [init_sigma], bounds=bounds, method=method, callback=self.callback)
+        result = minimize(self.objective, [init_sigma], bounds=bounds, method=method, callback=self.callback, options = {'ftol':1e-4})
 
         if result.success:
             sigma_opt = result.x[0]
@@ -147,3 +149,49 @@ class HullWhiteCalibrator:
             print("Calibration failed:", result.message)
 
         return result
+    
+
+# Bachelier (normal) vol from price
+def black_normal_vol(price, forward, strike, expiry, notional, annuity):
+    """
+    Computes the normal (Bachelier) implied volatility (in basis points) from a swaption or caplet price.
+
+    Parameters
+    ----------
+    price : float
+        Market price of the swaption or caplet.
+    forward : float
+        Forward swap rate.
+    strike : float
+        Swaption strike rate.
+    expiry : float
+        Time to expiry in years.
+    notional : float
+        Notional amount of the swaption or caplet.
+    annuity : float
+        Annuity factor for the swaption or caplet (DF x Year Frac.).
+
+    Returns
+    -------
+    float
+        Implied normal volatility in basis points (bps).
+    """
+    forward = forward / 100  # convert percentage to rate units
+    strike = strike / 100    # convert percentage to rate units
+
+    def bachelier_price(sigma):
+        if sigma <= 0:
+            return 0.0
+        d = (forward - strike) / (sigma * np.sqrt(expiry))
+        price_model = annuity * notional * ((forward - strike) * norm.cdf(d) + sigma * np.sqrt(expiry) * norm.pdf(d))
+        return price_model
+
+    def objective(sigma):
+        return bachelier_price(sigma) - price
+
+    # Reasonable bounds for normal vols (in rate units)
+    try:
+        sigma_normal = brentq(objective, 1e-6, 5.0)
+    except:
+        sigma_normal = np.nan
+    return sigma_normal * 10000  # convert to bps
