@@ -380,4 +380,108 @@ class HullWhitePricer:
             swaption = N * (floating_leg + fixed_leg)
 
         return swaption
+    
 
+    def coupon_bond(self, Tau, K, N):
+        """
+        Value a coupon bond.
+
+        Parameters
+        ----------
+        Tau : list of float
+            Payment dates of the bond (T1, T2, ..., TN).
+        K : float
+            Coupon rate (fixed rate per period).
+        N : float
+            Notional (scaling factor).
+        mc : bool
+            If True, Monte Carlo valuation under forward measure, else closed-form.
+
+        Returns
+        -------
+        float
+            PV of the coupon bond.
+        """
+
+        Annuity = 0
+        Delta = Tau[1] - Tau[0]
+
+        for i in range(len(Tau)):
+            P_T = self.model.discount_factor(Tau[i])
+            Annuity += Delta * P_T
+
+        bond_price = (Annuity * K + P_T) * N
+
+        return bond_price
+    
+
+    def floating_rate_note(self, Tau, N):
+        """
+        Value a floating rate note (FRN).
+
+        Parameters
+        ----------
+        Tau : list of float
+            Payment dates of the bond (T1, T2, ..., TN).
+
+        N : float
+            Notional (scaling factor).
+
+        Returns
+        -------
+        float
+            PV of the floating rate note.
+        """
+
+        disc_cf = self.pricer.swap(Tau, N, K = 0, payer=False, mc=False)
+        disc_notional = N * self.model.discount_factor(Tau[-1])
+        frn_price = disc_cf + disc_notional
+
+        return frn_price
+
+
+    def bond_option(self, T, Tau, C, K, N, call=True, mc=False):
+        """
+        European option on a coupon bond using simulation or analytical Jamshidian decomposition.
+
+        Parameters
+        ----------
+        T : float
+            Option expiry.
+        Tau : list of float
+            Payment dates of the bond (T1, T2, ..., TN).
+        C : float
+            Coupon rate. 
+        K : float
+            Strike price of the option (absolute price, not percentage).
+        N : float
+            Notional (scaling factor).
+        call : bool
+            True for a call, False for a put.
+        mc : bool
+            If True, Monte Carlo valuation under forward measure, else closed-form.
+
+        Returns
+        -------
+        float
+            PV of the European option on the coupon bond.
+        """
+
+        if mc:
+            CB_t = self.curve_sim.coupon_bearing_bond(T, Tau, C, N)
+            P_T = self.curve.discount(T)
+            bond_call = P_T *np.mean((np.maximum(CB_t - K, 0) if call else np.maximum(K - CB_t, 0)))
+
+        else:
+            print("Jamshidian decomposition to be implemented")
+
+        return bond_call
+
+
+
+
+        
+
+
+
+ 

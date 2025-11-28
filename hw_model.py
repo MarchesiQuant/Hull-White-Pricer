@@ -335,12 +335,12 @@ class HullWhiteSimulation:
         x = np.zeros((self.n_paths, self.n_steps + 1))
         r = np.zeros_like(x)
 
-        x[:, 0] = self.model.r0 - self.model.alpha(0)
-        r[:, 0] = self.model.r0
+        x[:, 0] = self.model.parameters['r0'] - self.model.alpha(0)
+        r[:, 0] = self.model.parameters['r0']
 
         for i in range(1, self.n_steps + 1):
             z = np.random.normal(size=self.n_paths)
-            x[:, i] = x[:, i - 1] - self.model.a * x[:, i - 1] * dt + self.model.sigma * np.sqrt(dt) * z
+            x[:, i] = x[:, i - 1] - self.model.parameters['a'] * x[:, i - 1] * dt + self.model.parameters['sigma'] * np.sqrt(dt) * z
             r[:, i] = x[:, i] + self.model.alpha(times[i])
 
         return r, times
@@ -364,8 +364,8 @@ class HullWhiteSimulation:
         r_euler_end = r_euler[:, -1]
         r_direct = self.simulate_short_rate_direct(T)
 
-        analytic_mean = self.model.r0 * np.exp(-self.model.a * T) + self.model.alpha(T) - np.exp(-self.model.a * T) * self.model.alpha(0)
-        analytic_std = np.sqrt((self.model.sigma**2) / (2 * self.model.a) * (1 - np.exp(-2 * self.model.a * T)))
+        analytic_mean = self.model.parameters['r0'] * np.exp(-self.model.parameters['a'] * T) + self.model.alpha(T) - np.exp(-self.model.parameters['a'] * T) * self.model.alpha(0)
+        analytic_std = np.sqrt((self.model.parameters['sigma']**2) / (2 * self.model.parameters['a']) * (1 - np.exp(-2 * self.model.parameters['a'] * T)))
 
         data = {
             "Mean": [np.mean(r_euler_end), np.mean(r_direct), analytic_mean],
@@ -469,7 +469,7 @@ class HullWhiteCurveBuilder:
         Returns
         -------
         ndarray
-            Bond price(s) for each Monte Carlo path.
+            Bond price distribution.
         """
         if fwd_measure:
             r_t = self.sim.simulate_short_rate_direct_forward(t)
@@ -495,7 +495,7 @@ class HullWhiteCurveBuilder:
         Returns
         -------
         ndarray
-            Discount factor for each Monte Carlo path.
+            Discount factor distribution
         """
         r_paths, times = self.sim.simulate_short_rate_euler(T)
         idx_T = np.searchsorted(times, T)
@@ -551,7 +551,7 @@ class HullWhiteCurveBuilder:
         Returns
         -------
         ndarray
-            Long rates for each Monte Carlo path.
+            Long rate distribution.
         """
 
         if fwd_measure:
@@ -593,4 +593,46 @@ class HullWhiteCurveBuilder:
         P_t_T2 = self.zero_coupon_bond(t, T2, fwd_measure=fwd_measure)
         F = (1 / (T2 - T1)) * (P_t_T1 / P_t_T2 - 1)
         return F
+    
+
+    def coupon_bearing_bond(self, t, Tau, K, N, fwd_measure=False):
+        """
+        Compute the future values of a coupon-bearing bond.
+
+        Parameters
+        ----------
+        t : float
+            Current time in years.
+        Tau : list of float
+            Remaining payment dates of the bond (T1, T2, ..., TN).
+        K : float
+            Coupon rate (fixed rate per period).
+        N : float
+            Notional (scaling factor).
+        fwd_measure : bool, optional
+            If True, simulate r(t) under the T-forward measure.
+
+        Returns
+        -------
+        ndarray
+            Bond price distribution.
+        """
+
+        Delta = Tau[1] - Tau[0]
+
+        # Remove payments already made
+        if Tau[0] < t:
+            Tau = [time for time in Tau if time >= t]
+
+        C = K * N * Delta
+        CB = 0
+
+        for i in range(len(Tau)):
+            P_t_Ti = self.zero_coupon_bond(t, Tau[i], fwd_measure = fwd_measure)
+            CB += C * P_t_Ti
+
+        CB = CB + N * self.zero_coupon_bond(t, Tau[-1], fwd_measure = fwd_measure) 
+
+        return CB
+    
 
