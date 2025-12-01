@@ -1,8 +1,6 @@
-from scipy.optimize import minimize
-import numpy as np
-from scipy.optimize import brentq
+from scipy.optimize import minimize, brentq
 from scipy.stats import norm
-
+import numpy as np
 
 class HullWhiteCalibrator:
     """
@@ -74,7 +72,7 @@ class HullWhiteCalibrator:
                 model_price = self.pricer.swaption(Tau, N, K)/DF # Forward Premium 
 
             else:
-                raise ValueError("Calibracion only implemented for 'Caplets' and 'Swaptions'.")
+                raise ValueError("Calibration only implemented for 'Caplets' and 'Swaptions'.")
 
             error += (1/n) * ((model_price - market_price)**2) / (market_price**2 + 1e-6)
 
@@ -192,6 +190,8 @@ def black_normal_vol(price, forward, strike, expiry, notional, annuity):
     # Reasonable bounds for normal vols (in rate units)
     try:
         sigma_normal = brentq(objective, 1e-6, 5.0)
-    except:
+        
+    except ValueError as e:
         sigma_normal = np.nan
+        print(f"Warning: Could not solve for vol: {e}")
     return sigma_normal * 10000  # convert to bps

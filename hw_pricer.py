@@ -330,27 +330,8 @@ class HullWhitePricer:
         T = Tau[0]  # Expiry
         S = Tau[-1] # Maturity
 
-        def jamshidian_root(Tau, K, r_star):
-            root = 0
-            for i in range(1, len(Tau)):
-                T1 = Tau[i - 1]
-                T2 = Tau[i]
-                Delta = T2 - T1
-                B = self.model.B(T, T2)
-                A = self.model.A(T, T2)
-                P_i = A * np.exp(-B * r_star)
-                root += Delta * K * P_i
-
-            root = root - (1 - P_i)
-            return root
-        
-        def find_rstar(Tau, K, x_min=-3, x_max= 3):
-            f = lambda r: jamshidian_root(Tau, K, r)
-            r_star = brentq(f, x_min, x_max, xtol=1e-12)
-            return r_star
-
         if mc:
-            P_N = self.curve_builder.zero_coupon_bond(T, S, fwd_measure=True)
+            P_N = self.curve_sim.zero_coupon_bond(T, S, fwd_measure=True)
             P_T = self.model.discount_factor(T)
             floating_leg = 1 - P_N
             fixed_leg = 0
@@ -358,13 +339,13 @@ class HullWhitePricer:
                 T1 = Tau[i - 1]
                 T2 = Tau[i]
                 Delta = T2 - T1
-                P_i = self.curve_builder.zero_coupon_bond(T, T2, fwd_measure=True)
+                P_i = self.curve_sim.zero_coupon_bond(T, T2, fwd_measure=True)
                 fixed_leg += Delta * K * P_i 
             
             swaption = P_T * N * np.mean(np.maximum(w * (floating_leg - fixed_leg), 0))
 
         else:
-            r_star = find_rstar(Tau, K)
+            r_star = self._find_rstar(T, Tau, K)
             fixed_leg = 0
             for i in range(1, len(Tau)):
                 T1 = Tau[i - 1]
@@ -372,17 +353,22 @@ class HullWhitePricer:
                 Delta = T2 - T1
                 B = self.model.B(T, T2)
                 A = self.model.A(T, T2)
-                P_i = A * np.exp(-B * r_star)
-                option = self.zero_bond_put(T, T2, P_i) if payer else self.zero_bond_call(T, T2, P_i)   
+                K_i = A * np.exp(-B * r_star)
+                option = self.zero_bond_put(T, T2, K_i) if payer else self.zero_bond_call(T, T2, K_i)   
                 fixed_leg += Delta * K * option
             
-            floating_leg = option
+            # Floating leg: option on zero-coupon bond maturing at S
+            B_N = self.model.B(T, S)
+            A_N = self.model.A(T, S)
+            K_N = A_N * np.exp(-B_N * r_star)
+            floating_leg = self.zero_bond_put(T, S, K_N) if payer else self.zero_bond_call(T, S, K_N)
+            
             swaption = N * (floating_leg + fixed_leg)
 
         return swaption
     
 
-    def coupon_bond(self, Tau, K, N):
+    def coupon_bond(self, Tau, C, N):
         """
         Value a coupon bond.
 
@@ -390,12 +376,10 @@ class HullWhitePricer:
         ----------
         Tau : list of float
             Payment dates of the bond (T1, T2, ..., TN).
-        K : float
-            Coupon rate (fixed rate per period).
+        C : float
+            Coupon rate (annualized).
         N : float
             Notional (scaling factor).
-        mc : bool
-            If True, Monte Carlo valuation under forward measure, else closed-form.
 
         Returns
         -------
@@ -403,14 +387,13 @@ class HullWhitePricer:
             PV of the coupon bond.
         """
 
-        Annuity = 0
-        Delta = Tau[1] - Tau[0]
+        bond_price = 0
+        Delta = (Tau[-1] - Tau[0])
 
         for i in range(len(Tau)):
-            P_T = self.model.discount_factor(Tau[i])
-            Annuity += Delta * P_T
-
-        bond_price = (Annuity * K + P_T) * N
+            P_T = self.curve.discount(Tau[i])
+            cashflow = N * (1 + C * Delta) if i == len(Tau) - 1 else N * C * Delta
+            bond_price += cashflow * P_T
 
         return bond_price
     
@@ -433,7 +416,7 @@ class HullWhitePricer:
             PV of the floating rate note.
         """
 
-        disc_cf = self.pricer.swap(Tau, N, K = 0, payer=False, mc=False)
+        disc_cf = self.swap(Tau, N, K=0, payer=False, mc=False)
         disc_notional = N * self.model.discount_factor(Tau[-1])
         frn_price = disc_cf + disc_notional
 
@@ -451,7 +434,7 @@ class HullWhitePricer:
         Tau : list of float
             Payment dates of the bond (T1, T2, ..., TN).
         C : float
-            Coupon rate. 
+            Coupon rate (annualized). 
         K : float
             Strike price of the option (absolute price, not percentage).
         N : float
@@ -469,15 +452,161 @@ class HullWhitePricer:
 
         if mc:
             CB_t = self.curve_sim.coupon_bearing_bond(T, Tau, C, N)
-            P_T = self.curve.discount(T)
-            bond_call = P_T *np.mean((np.maximum(CB_t - K, 0) if call else np.maximum(K - CB_t, 0)))
+            P_T = self.model.discount_factor(T)
+            bond_option = P_T * np.mean((np.maximum(CB_t - K, 0) if call else np.maximum(K - CB_t, 0)))
 
         else:
-            print("Jamshidian decomposition to be implemented")
+            # Find critical short rate r* using Jamshidian decomposition for bond options
+            r_star = self._find_rstar_bond(T, Tau, C, N, K)
+            bond_option = 0
+            Delta = (Tau[-1] - Tau[0]) 
 
-        return bond_call
+            # Decompose into portfolio of zero-coupon bond options
+            for i in range(len(Tau)):
+                B = self.model.B(T, Tau[i])
+                A = self.model.A(T, Tau[i])
+                K_i = A * np.exp(-B * r_star)  # Strike for each zero-coupon bond
+                
+                # Value option on each zero-coupon bond
+                option = self.zero_bond_call(T, Tau[i], K_i) if call else self.zero_bond_put(T, Tau[i], K_i)
+                
+                # Apply correct cashflow: C is annualized rate, multiply by Delta
+                cashflow = N * (1 + C * Delta) if i == len(Tau) - 1 else N * C * Delta
+                bond_option += cashflow * option
+
+        return bond_option
 
 
+    # --- Helper methods for Jamshidian decomposition --- #
+
+    def _jamshidian_root(self, T, Tau, K, r_star):
+        """
+        Jamshidian root-finding function for swaption pricing.
+
+        Parameters
+        ----------
+        T : float
+            Option expiry time.
+        Tau : list of float
+            Payment times for the swap.
+        K : float
+            Fixed rate.
+        r_star : float
+            Short rate candidate.
+
+        Returns
+        -------
+        float
+            Root equation value.
+        """
+        root = 0
+        for i in range(1, len(Tau)):
+            T1 = Tau[i - 1]
+            T2 = Tau[i]
+            Delta = T2 - T1
+            B = self.model.B(T, T2)
+            A = self.model.A(T, T2)
+            P_i = A * np.exp(-B * r_star)
+            root += Delta * K * P_i
+
+        root = root - (1 - P_i)
+        return root
+
+
+    def _find_rstar(self, T, Tau, K, x_min=-3, x_max=3):
+        """
+        Find critical short rate r* using Brent's method.
+
+        Parameters
+        ----------
+        T : float
+            Option expiry time.
+        Tau : list of float
+            Payment times for the swap.
+        K : float
+            Fixed rate.
+        x_min : float, optional
+            Lower bound for root search.
+        x_max : float, optional
+            Upper bound for root search.
+
+        Returns
+        -------
+        float
+            Critical short rate r*.
+        """
+        f = lambda r: self._jamshidian_root(T, Tau, K, r)
+        r_star = brentq(f, x_min, x_max, xtol=1e-12)
+        return r_star
+
+
+    def _jamshidian_root_bond(self, T, Tau, C, N, K_strike, r_star):
+        """
+        Jamshidian root-finding function for bond option pricing.
+        Solves: sum(cashflow_i * P(T, T_i; r*)) = K_strike
+
+        Parameters
+        ----------
+        T : float
+            Option expiry time.
+        Tau : list of float
+            Coupon payment dates.
+        C : float
+            Coupon rate (annualized).
+        N : float
+            Notional amount.
+        K_strike : float
+            Strike price of the bond option.
+        r_star : float
+            Short rate candidate.
+
+        Returns
+        -------
+        float
+            Root equation value (bond price - strike).
+        """
+        bond_price = 0
+        Delta = (Tau[-1] - Tau[0])
+        
+        for i in range(len(Tau)):
+            B = self.model.B(T, Tau[i])
+            A = self.model.A(T, Tau[i])
+            P_i = A * np.exp(-B * r_star)
+            cashflow = N * (1 + C * Delta) if i == len(Tau) - 1 else N * C * Delta
+            bond_price += cashflow * P_i
+        
+        return bond_price - K_strike
+
+
+    def _find_rstar_bond(self, T, Tau, C, N, K_strike, x_min=-3, x_max=3):
+        """
+        Find critical short rate r* for bond option using Brent's method.
+
+        Parameters
+        ----------
+        T : float
+            Option expiry time.
+        Tau : list of float
+            Coupon payment dates.
+        C : float
+            Coupon rate (annualized).
+        N : float
+            Notional amount.
+        K_strike : float
+            Strike price of the bond option.
+        x_min : float, optional
+            Lower bound for root search.
+        x_max : float, optional
+            Upper bound for root search.
+
+        Returns
+        -------
+        float
+            Critical short rate r*.
+        """
+        f = lambda r: self._jamshidian_root_bond(T, Tau, C, N, K_strike, r)
+        r_star = brentq(f, x_min, x_max, xtol=1e-12)
+        return r_star
 
 
         
