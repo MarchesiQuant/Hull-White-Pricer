@@ -229,7 +229,7 @@ class HullWhiteModel:
         a = self.parameters['a']
         sigma = self.parameters['sigma']
         V = (sigma**2 / (2 * a)) * (1 - np.exp(-2 * a * t))
-        E = self.curve.inst_forward_rate(t)
+        E = self.curve.inst_forward_rate(t) 
         return E + np.sqrt(V) * z
 
 
